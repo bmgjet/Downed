@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Downed", "bmgjet", "1.0.0")]
+    [Info("Downed", "bmgjet", "1.0.1")]
     [Description("Extends knocked down timer and give cui to player. Allow NPC Knock Downs")]
 
     class Downed : RustPlugin
@@ -22,18 +22,20 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Allow NPCs to be knocked down: ")] public bool NPCDowned { get; set; }
             [JsonProperty(PropertyName = "How long before NPC gets back up: ")] public int NPCDownTimer { get; set; }
             [JsonProperty(PropertyName = "Percentage for NPC to bleedout: ")] public int NPCBleedOutChance { get; set; }
+            [JsonProperty(PropertyName = "Allow Looting Downed NPCs: ")] public bool NPCLoot { get; set; }
         }
 
         private PluginConfig GetDefaultConfig()
         {
             return new PluginConfig
             {
-            UIDelay = 10,
-            Countdown = 20,
-            Bleedout = 120,
-            NPCDowned = true,
-            NPCDownTimer = 20,
-            NPCBleedOutChance = 50,
+                UIDelay = 10,
+                Countdown = 20,
+                Bleedout = 120,
+                NPCDowned = true,
+                NPCDownTimer = 20,
+                NPCBleedOutChance = 50,
+                NPCLoot = true,
             };
         }
 
@@ -64,54 +66,70 @@ namespace Oxide.Plugins
             {
                 config = null;
             }
-            foreach (BasePlayer current in BasePlayer.activePlayerList)
+            foreach (BasePlayer player in BasePlayer.activePlayerList)
             {
-                cuidestroy(current);
+                cleanup(player);
             }
         }
 
         void OnPlayerDisconnected(BasePlayer player)
         {
-            removedowned(player);
-            cuidestroy(player);
+            cleanup(player);
         }
 
         object OnPlayerRespawn(BasePlayer player)
         {
-            removedowned(player);
-            cuidestroy(player);
-            return null;
+            return cleanup(player);
         }
 
         object OnPlayerRecover(BasePlayer player)
         {
-            removedowned(player);
-            cuidestroy(player);
-            return null;
+            return cleanup(player);
+        }
+
+        private void OnLootEntity(BasePlayer player, BaseEntity entity)
+        {
+            if (config.NPCLoot) //exit hook straight away since npc can be looted.
+                return;
+
+            BasePlayer loot = entity.ToPlayer();
+            if (loot == null)
+                return;
+
+            if (loot.IsWounded() && loot.IsNpc)
+                NextTick(player.EndLooting);
         }
 
         private object OnEntityTakeDamage(BasePlayer player, HitInfo hitInfo)
         {
-            //Allows player to Suicide without knock down.
             Rust.DamageType damageType = hitInfo.damageTypes.GetMajorityDamageType();
-            if (damageType != Rust.DamageType.Suicide) return null;
-            player.DieInstantly();
-            return false;
+            if (damageType == Rust.DamageType.Suicide || damageType == Rust.DamageType.Drowned)
+            {
+                //Allows player to Suicide without knock down.
+                //Stops Players wounding under water.
+                if (damageType == Rust.DamageType.Drowned)
+                {
+                    if (player.health > 0)
+                        return null;
+                }
+                player.DieInstantly();
+                return false;
+            }
+            return null;
         }
 
         object OnPlayerWound(BasePlayer player)
         {
-            //Custom downed Function
             if (!downedPlayers.ContainsKey(player.userID))
             {
-                //Creates a timer to switches to crawl and provides getup cui.
+                //Creates a timer to switches to crawl
                 downedPlayers.Add(player.userID, timer.Once(config.UIDelay, () =>
                 {
                     if (!player.IsDead())
                     {
                         player.StopWounded(); //Reset the wounded state
                         downedPlayers[player.userID] = null; //Clear this timer
-                        LongDown(player); //Custom wounded state
+                        LongDown(player); //Custom wounded state with cui
                         player.SendNetworkUpdateImmediate();
                     }
                 }));
@@ -152,14 +170,13 @@ namespace Oxide.Plugins
                                 //Chance of bleedout
                                 if (UnityEngine.Random.Range(0f, 100f) < config.NPCBleedOutChance)
                                 {
-                                    player.StopWounded(); //Reset the wounded state
+                                    player.StopWounded(); //NPC Gets up
                                     return;
                                 }
                                 player.DieInstantly();
                             }
                         });
                     }
-
                     player.BecomeWounded();
                     return false; //Prevent die
                 }
@@ -182,7 +199,14 @@ namespace Oxide.Plugins
                 }
                 downedPlayers.Remove(player.userID);
             }
-        }       
+        }
+
+        public object cleanup(BasePlayer player)
+        {
+            removedowned(player); //Remove from custom downed list
+            cuidestroy(player);   //Removes all CUI
+            return null;
+        }
 
         void UserUI(BasePlayer player, string msg)
         {
@@ -219,12 +243,12 @@ namespace Oxide.Plugins
             if (downed) //Down player
             {
                 player.BecomeWounded();
-                player.ProlongWounding(config.Bleedout); //500 sec too bleed out
+                player.ProlongWounding(config.Bleedout); //time too bleed out
                 player.SendNetworkUpdate();
                 UserUI(player, "<color=red>You Have Been Downed!</color>");
                 return;
             }
-            player.StopWounded(); //End down player.
+            player.StopWounded(); //End downed player.
             player.SendNetworkUpdate();
             cuidestroy(player);
         }
@@ -234,13 +258,15 @@ namespace Oxide.Plugins
         [ConsoleCommand("playergetup")]
         private void playergetup(ConsoleSystem.Arg arg)
         {
+            //Getup
             var player = arg.Connection.player as BasePlayer;
             if (player == null) return;
 
             cuidestroy(player);
-            player.SetPlayerFlag(global::BasePlayer.PlayerFlags.Incapacitated, true);
+            player.SetPlayerFlag(global::BasePlayer.PlayerFlags.Incapacitated, true); //Flip onto back.
             player.SetServerFall(true);
             int i = 0;
+            //Start Countdown timer
             var countdowntimer = timer.Repeat(1, config.Countdown + 1, () =>
             {
                 if (!player.IsDead() && downedPlayers.ContainsKey(player.userID))
@@ -270,6 +296,7 @@ namespace Oxide.Plugins
         [ConsoleCommand("playerdie")]
         private void playerdie(ConsoleSystem.Arg arg)
         {
+            //Respawn
             var player = arg.Connection.player as BasePlayer;
             if (player == null) return;
             player.DieInstantly();
@@ -280,6 +307,7 @@ namespace Oxide.Plugins
         [ChatCommand("down")]
         private void CmdplayerFall(BasePlayer player, string command, string[] args)
         {
+            //Trigger player by name to become wounded
             if (player.IsAdmin)
             {
                 BasePlayer moddedpayer;
@@ -303,6 +331,7 @@ namespace Oxide.Plugins
         [ChatCommand("getup")]
         private void CmdplayerGetup(BasePlayer player, string command, string[] args)
         {
+            //Trigger player by name to get back up.
             if (player.IsAdmin)
             {
                 BasePlayer moddedpayer;
