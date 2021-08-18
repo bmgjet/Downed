@@ -5,13 +5,14 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Downed", "bmgjet", "1.0.1")]
+    [Info("Downed", "bmgjet", "1.0.2")]
     [Description("Extends knocked down timer and give cui to player. Allow NPC Knock Downs")]
 
     class Downed : RustPlugin
     {
         private static PluginConfig config;
         public Dictionary<ulong, Timer> downedPlayers = new Dictionary<ulong, Timer> { { (ulong)0, null } };
+        public int ActiveBoomBoxes = 0;
 
         #region Configuration
         private class PluginConfig
@@ -22,7 +23,13 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Allow NPCs to be knocked down: ")] public bool NPCDowned { get; set; }
             [JsonProperty(PropertyName = "How long before NPC gets back up: ")] public int NPCDownTimer { get; set; }
             [JsonProperty(PropertyName = "Percentage for NPC to bleedout: ")] public int NPCBleedOutChance { get; set; }
-            [JsonProperty(PropertyName = "Allow Looting Downed NPCs: ")] public bool NPCLoot { get; set; }
+            [JsonProperty(PropertyName = "Only NPCs get knocked: ")] public bool NPCOnly { get; set; }
+            [JsonProperty(PropertyName = "Block NPC Looting: ")] public bool NPCNoLoot { get; set; }
+            [JsonProperty(PropertyName = "Ignore Scarecrow: ")] public bool IgnoreScarecrow { get; set; }
+            [JsonProperty(PropertyName = "Ignore Murderer: ")] public bool IgnoreMurderer { get; set; }
+            [JsonProperty(PropertyName = "NPC Dont Shoot Downed: ")] public bool NPCIgnoreDowned { get; set; }
+            [JsonProperty(PropertyName = "SFX On Downed (Delete link to disable): ")] public string SFX { get; set; }
+            [JsonProperty(PropertyName = "SFX PlayTime: ")] public float SFXPlayTime { get; set; }
         }
 
         private PluginConfig GetDefaultConfig()
@@ -35,7 +42,13 @@ namespace Oxide.Plugins
                 NPCDowned = true,
                 NPCDownTimer = 20,
                 NPCBleedOutChance = 50,
-                NPCLoot = true,
+                NPCOnly = false,
+                NPCNoLoot = false,
+                IgnoreScarecrow = false,
+                IgnoreMurderer = false,
+                NPCIgnoreDowned = false,
+                SFX = "https://github.com/bmgjet/Stations/raw/main/Help.Me.mp3",
+                SFXPlayTime = 15
             };
         }
 
@@ -86,18 +99,33 @@ namespace Oxide.Plugins
         {
             return cleanup(player);
         }
-
-        private void OnLootEntity(BasePlayer player, BaseEntity entity)
+        private object CanLootPlayer(BasePlayer target, BasePlayer looter)
         {
-            if (config.NPCLoot) //exit hook straight away since npc can be looted.
-                return;
+            if (target == null || looter == null || !config.NPCNoLoot) return null;
+                if (target.IsWounded() && target.IsNpc)
+                {
+                NextTick(looter.EndLooting);
+                return false;
+                }
+            return null;
+        }
 
-            BasePlayer loot = entity.ToPlayer();
-            if (loot == null)
-                return;
-
-            if (loot.IsWounded() && loot.IsNpc)
-                NextTick(player.EndLooting);
+        private object OnNpcTarget(NPCPlayerApex npc, BaseEntity entity)
+        {
+            if (entity == null || npc == null) return null;
+            if(npc.IsWounded() || npc.IsIncapacitated())
+            {
+                return true;
+            }
+            BasePlayer target = entity.ToPlayer();
+            if (target != null)
+            {
+                if (config.NPCIgnoreDowned && entity.ToPlayer().IsWounded())
+                {
+                    return true;
+                }
+            }
+            return null;
         }
 
         private object OnEntityTakeDamage(BasePlayer player, HitInfo hitInfo)
@@ -120,8 +148,9 @@ namespace Oxide.Plugins
 
         object OnPlayerWound(BasePlayer player)
         {
-            if (!downedPlayers.ContainsKey(player.userID))
+            if (!downedPlayers.ContainsKey(player.userID) && !config.NPCOnly )
             {
+                CreateSound(player);
                 //Creates a timer to switches to crawl
                 downedPlayers.Add(player.userID, timer.Once(config.UIDelay, () =>
                 {
@@ -140,6 +169,26 @@ namespace Oxide.Plugins
         {
             if (player != null)
             {
+                //Check if ScareCrow
+                if(config.IgnoreScarecrow)
+                {
+                    var combatEntity = player as BaseCombatEntity;
+                    if (combatEntity != null && combatEntity.ShortPrefabName != "scarecrow")
+                    {
+                        return null; //Disables Downed
+                    }
+                }
+
+                //Check if Murderer
+                if (config.IgnoreMurderer)
+                {
+                    var combatEntity = player as BaseCombatEntity;
+                    if (combatEntity != null && combatEntity.ShortPrefabName != "murderer")
+                    {
+                        return null; //Disables Downed
+                    }
+                }
+
                 //Always enter wounded if not already.
                 if (!downedPlayers.ContainsKey(player.userID))
                 {
@@ -177,6 +226,10 @@ namespace Oxide.Plugins
                             }
                         });
                     }
+                    if (config.NPCOnly && !player.IsNpc)
+                    {
+                        return null;//NPCs only.
+                    }
                     player.BecomeWounded();
                     return false; //Prevent die
                 }
@@ -201,6 +254,42 @@ namespace Oxide.Plugins
             }
         }
 
+        private void CreateSound(BasePlayer player)
+        {
+            if (ActiveBoomBoxes > 2) return; //Stops massive spam
+            ActiveBoomBoxes++;
+            //Spawns a boom box if SFX string is set. Places it under players location and plays the set SFX mp3.
+            //Despawns when player dies or after SFXPlayTime setting.
+            if (config.SFX == "") return;
+            Vector3 position = new Vector3(0f, -1f, 0f);
+            DeployableBoomBox boombox = GameManager.server.CreateEntity("assets/prefabs/voiceaudio/boombox/boombox.deployed.prefab", position, default(Quaternion), true) as DeployableBoomBox;
+            boombox.gameObject.Identity();
+            boombox.SetParent(player); //Parent so boombox moves with player.
+            boombox.Spawn();
+            boombox.SetFlag(BaseEntity.Flags.Reserved8, true);
+            boombox.transform.localPosition = position;
+            boombox.BoxController.CurrentRadioIp = config.SFX;
+            boombox.BoxController.ServerTogglePlay(false);
+            boombox.BoxController.baseEntity.ClientRPC<string>(null, "OnRadioIPChanged", boombox.BoxController.CurrentRadioIp);
+            boombox.BoxController.ServerTogglePlay(true);
+            timer.Once(config.SFXPlayTime, () =>
+            {
+                ActiveBoomBoxes--;
+                //Destroy boombox after playtime
+                try
+                {
+                    boombox?.BoxController.ServerTogglePlay(false);
+                    boombox?.Kill();
+                }
+                catch { }
+            });
+
+            //Fix for if it goes out of sync.
+            if (ActiveBoomBoxes < 0 || ActiveBoomBoxes > 20)
+                ActiveBoomBoxes = 0;
+        }
+       
+
         public object cleanup(BasePlayer player)
         {
             removedowned(player); //Remove from custom downed list
@@ -213,7 +302,7 @@ namespace Oxide.Plugins
             if (msg == "") return;
             cuidestroy(player);
             var elements = new CuiElementContainer();
-            elements.Add(new CuiPanel { Image = { Color = "1 1 1 0.2" }, RectTransform = { AnchorMin = "0.805 0.944", AnchorMax = "1 1" }, CursorEnabled = false }, "Overlay", "Downed1");
+            elements.Add(new CuiPanel { Image = { Color = "1 1 1 0.2" }, RectTransform = { AnchorMin = "0.805 0.944", AnchorMax = "1 1" }, CursorEnabled = true }, "Overlay", "Downed1");
             elements.Add(new CuiLabel { Text = { Text = msg, FontSize = 15, Align = TextAnchor.MiddleCenter }, RectTransform = { AnchorMin = "0.806 0.975", AnchorMax = "0.99 0.999" } }, "Overlay", "Downed2");
             elements.Add(new CuiButton { Button = { Command = "global.playergetup", Color = "0 0.78 0 0.5" }, RectTransform = { AnchorMin = "0.815 0.950", AnchorMax = "0.900 0.970" }, Text = { Text = "Get Up", FontSize = 10, Align = TextAnchor.MiddleCenter } }, "Overlay", "Downed3");
             elements.Add(new CuiButton { Button = { Command = "global.playerdie", Color = "0.78 0 0 0.5" }, RectTransform = { AnchorMin = "0.910 0.950", AnchorMax = "0.995 0.970" }, Text = { Text = "Respawn", FontSize = 10, Align = TextAnchor.MiddleCenter } }, "Overlay", "Downed4");
@@ -304,7 +393,7 @@ namespace Oxide.Plugins
             removedowned(player);
         }
 
-        [ChatCommand("down")]
+        [ChatCommand("playerdown")]
         private void CmdplayerFall(BasePlayer player, string command, string[] args)
         {
             //Trigger player by name to become wounded
@@ -328,7 +417,7 @@ namespace Oxide.Plugins
                 moddedpayer.BecomeWounded();
             }
         }
-        [ChatCommand("getup")]
+        [ChatCommand("playerup")]
         private void CmdplayerGetup(BasePlayer player, string command, string[] args)
         {
             //Trigger player by name to get back up.
