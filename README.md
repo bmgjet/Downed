@@ -12,8 +12,13 @@
   "Ignore Scarecrow: ": false,<br />
   "Ignore Murderer: ": false,<br />
   "NPC Dont Shoot Downed: ": false,<br />
-  "SFX On Downed (Delete link to disable): ": "https://github.com/bmgjet/Stations/raw/main/Help.Me.mp3",<br />
-  "SFX PlayTime: ": 15.0<br />
+  "SFX On Downed (Delete link to disable): ": [<br />
+    "https://github.com/bmgjet/Stations/raw/main/Help.Me.mp3",<br />
+    "https://github.com/bmgjet/Downed/raw/main/Help.Me.mp3"<br />
+  ],<br />
+  "SFX PlayTime: ": 10.0,<br />
+  "SFX Allow on NPC: ": true,<br />
+  "SFX Allow on PLAYER: ": true<br />
 }</p>
 </blockquote>
 <p><br /><strong>Video:</strong><br />https://www.youtube.com/watch?v=BUZumClkRqE</p>
