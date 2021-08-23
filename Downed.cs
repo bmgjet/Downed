@@ -156,6 +156,7 @@ namespace Oxide.Plugins
                 //Creates a timer to switches to crawl
                 downedPlayers.Add(player.userID, timer.Once(config.UIDelay, () =>
                 {
+		try{
                     if (!player.IsDead())
                     {
                         player.StopWounded(); //Reset the wounded state
@@ -163,6 +164,8 @@ namespace Oxide.Plugins
                         LongDown(player); //Custom wounded state with cui
                         player.SendNetworkUpdateImmediate();
                     }
+		   }
+		catch{}
                 }));
             }
             return null; //Normal operation.
