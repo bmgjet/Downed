@@ -156,7 +156,8 @@ namespace Oxide.Plugins
                 //Creates a timer to switches to crawl
                 downedPlayers.Add(player.userID, timer.Once(config.UIDelay, () =>
                 {
-                    if (player != null && !player.IsDead())
+                    if (player == null) { return; }
+                    if (!player.IsDead())
                     {
                         player.StopWounded(); //Reset the wounded state
                         downedPlayers[player.userID] = null; //Clear this timer
@@ -208,13 +209,23 @@ namespace Oxide.Plugins
                                 currentgun.primaryMagazine.contents = 0;
                                 var reloadloop = timer.Repeat(1.8f, config.NPCDownTimer, () =>
                                 {
-                                    currentgun.primaryMagazine.contents = 0; //Keep unloading so cant shoot.
+                                    try
+                                    {
+                                        if (currentgun != null)
+                                        {
+                                            currentgun.primaryMagazine.contents = 0; //Keep unloading so cant shoot.
+                                        }
+                                    }
+                                    catch { }
                                 });
                                 timer.Once(config.NPCDownTimer + 5f, () =>
                                 {
                                     try
                                     {
-                                        reloadloop.Destroy();
+                                        if (reloadloop != null)
+                                        {
+                                            reloadloop.Destroy();
+                                        }
                                     }
                                     catch { }
                                 });
@@ -222,6 +233,7 @@ namespace Oxide.Plugins
                         }
                         timer.Once(config.NPCDownTimer, () =>
                         {
+                            if (player == null) { return; }
                             if (player.IsAlive())
                             {
                                 //Chance of bleedout
@@ -290,8 +302,11 @@ namespace Oxide.Plugins
             sph.LerpRadiusTo(0.01f, 1f);
             timer.Once(1f, () => {
                 if (sph != null)
+                {
                     sph.SetParent(player);
-                sph.transform.localPosition = new Vector3(0, -1.5f, 0f);
+                    sph.transform.localPosition = new Vector3(0, -1.5f, 0f);
+                }
+                if (boombox == null) { return; }
                 boombox.BoxController.CurrentRadioIp = url;
                 boombox.BoxController.baseEntity.ClientRPC<string>(null, "OnRadioIPChanged", boombox.BoxController.CurrentRadioIp);
                 boombox.BoxController.ServerTogglePlay(true);
@@ -300,7 +315,9 @@ namespace Oxide.Plugins
                     try
                     {
                         if (sph != null)
+                        {
                             sph?.Kill();
+                        }
                     }
                     catch { }
                 });
@@ -342,6 +359,7 @@ namespace Oxide.Plugins
         }
         private void LongDown(BasePlayer player, bool downed = true)
         {
+            if(player == null) { return; }
             if (downed) //Down player
             {
                 player.BecomeWounded();
@@ -373,6 +391,7 @@ namespace Oxide.Plugins
             {
                 try
                 {
+                    if (player == null) { return; }
                     if (!player.IsDead() && downedPlayers.ContainsKey(player.userID))
                     {
                         GetUpTimer(player, "<color=red>Get UP IN</color> " + (config.Countdown - i).ToString());
@@ -393,13 +412,16 @@ namespace Oxide.Plugins
                 catch { }
             });
             timer.Once(config.Countdown + 5f, () =>
-             {
-                 try
-                 {
-                     countdowntimer.Destroy();
-                 }
-                 catch { }
-             });
+            {
+                try
+                {
+                    if (countdowntimer != null)
+                    {
+                        countdowntimer.Destroy();
+                    }
+                }
+                catch { }
+            });
             if (downedPlayers.ContainsKey(player.userID))
             {
                 downedPlayers.Remove(player.userID);
